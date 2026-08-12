@@ -1,54 +1,38 @@
-from flask import Flask, request, render_template
-from fer import FER
-from PIL import Image
-import numpy as np
-import io
+from flask import Flask,render_template,request,jsonify
+from src.predictor import EmotionPredictor
+from src.recommender import recommend
 
-app = Flask(__name__)
+app=Flask(__name__)
+predictor=None
 
-def detect_emotion(image):
-    # Convert PIL image to NumPy array
-    image_np = np.array(image)
-    
-    # Initialize emotion detector
-    detector = FER()
-    
-    # Detect emotions
-    emotions = detector.detect_emotions(image_np)
-    
-    if emotions:
-        dominant_emotion = max(emotions[0]['emotions'], key=emotions[0]['emotions'].get)
-        return dominant_emotion
-    return "unknown"
+def get_predictor():
+    global predictor
+    if predictor is None: predictor=EmotionPredictor()
+    return predictor
 
-def get_recommended_songs(emotion):
-    song_database = {
-        "happy": [
-            {"name": "I Like Me Better", "artist": "Lauv"},
-            {"name": "Levitating", "artist": "Dua Lipa"},
-        ],
-        "sad": [
-            {"name": "Let Me Down Slowly", "artist": "Alec Benjamin"},
-            {"name": "1-800-273-8255", "artist": "Logic"},
-        ],
-        "angry": [
-            {"name": "Smells Like Teen Spirit", "artist": "Nirvana"},
-            {"name": "R.I.P My Youth", "artist": "The Neighbourhood"},
-        ],
-    }
-    return song_database.get(emotion, [])
+@app.get("/")
+def home(): return render_template("index.html")
 
-@app.route('/')
-def home():
-    return render_template('index.html')
+@app.get("/api/health")
+def health():
+    try:
+        get_predictor()
+        return jsonify({"status":"healthy","model":"loaded"})
+    except Exception as e:
+        return jsonify({"status":"error","error":str(e)}),503
 
-@app.route('/upload', methods=['POST'])
-def upload_file():
-    image_file = request.files['file']  # Get the uploaded file
-    image = Image.open(image_file.stream)  # Convert to PIL Image
-    detected_emotion = detect_emotion(image)  # Get the detected emotion
-    songs = get_recommended_songs(detected_emotion)  # Fetch songs based on the detected emotion
-    return render_template('result.html', emotion=detected_emotion, songs=songs)
+@app.post("/api/predict")
+def predict():
+    if "image" not in request.files:
+        return jsonify({"error":"Upload an image using the image field."}),400
+    try:
+        result=get_predictor().predict(request.files["image"].read())
+        result["recommendations"]=recommend(result["expression"])
+        return jsonify(result)
+    except ValueError as e:
+        return jsonify({"error":str(e)}),400
+    except Exception as e:
+        return jsonify({"error":str(e)}),500
 
-if __name__ == '__main__':
-    app.run(debug=True)
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=5000,debug=True)
